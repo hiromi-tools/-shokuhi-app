@@ -235,6 +235,79 @@
     padding: 6px 10px;
     line-height: 1;
   }
+  .entry-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .edit-btn {
+    background: none;
+    border: none;
+    color: var(--sub);
+    font-size: 14px;
+    font-weight: 700;
+    padding: 6px 8px;
+    border-radius: 8px;
+  }
+  .edit-btn:active {
+    background: #f3e6f5;
+  }
+  .date-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 4px 6px;
+    margin-top: 6px;
+    border-bottom: 2px solid var(--border);
+  }
+  .date-group:first-child .date-group-header {
+    margin-top: 0;
+  }
+  .date-group-date {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .date-group-total {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--green-dark);
+  }
+  .entry-edit {
+    padding: 14px 4px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .entry-edit label {
+    margin: 10px 0 6px;
+  }
+  .entry-edit input, .entry-edit select {
+    padding: 12px;
+    font-size: 16px;
+  }
+  .edit-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .edit-actions button {
+    flex: 1;
+    padding: 13px;
+    font-size: 15px;
+    font-weight: 700;
+    border: none;
+    border-radius: 10px;
+  }
+  .save-edit-btn {
+    background: var(--green);
+    color: #fff;
+  }
+  .save-edit-btn:active {
+    background: var(--green-dark);
+  }
+  .cancel-edit-btn {
+    background: #f3e6f5;
+    color: var(--text);
+  }
   .empty {
     text-align: center;
     color: var(--sub);
@@ -381,7 +454,7 @@
     <select id="categoryInput">
       <option value="肉・魚">肉・魚</option>
       <option value="野菜">野菜</option>
-      <option value="豆類">豆類</option>
+      <option value="卵">卵</option>
       <option value="米">米</option>
       <option value="酒">酒</option>
       <option value="乳製品">乳製品</option>
@@ -426,6 +499,32 @@ const SETTINGS_KEY = 'food_budget_settings';
 
 let entries = [];
 let budget = DEFAULT_BUDGET;
+let editingId = null;
+
+const STORE_OPTIONS = ['ロピア', 'あおば', 'オーケー', 'セレサモス', 'その他'];
+const CATEGORY_OPTIONS = ['肉・魚', '野菜', '卵', '米', '酒', '乳製品', '調味料', 'その他'];
+
+function buildStoreOptionsHtml(currentStore) {
+  const namedStores = STORE_OPTIONS.slice(0, -1); // 「その他」を除く
+  const isNamed = namedStores.includes(currentStore);
+  return STORE_OPTIONS.map(opt => {
+    const selected = isNamed ? (opt === currentStore) : (opt === 'その他');
+    return `<option value="${escapeHtml(opt)}"${selected ? ' selected' : ''}>${escapeHtml(opt)}</option>`;
+  }).join('');
+}
+
+function isOtherStoreSelected(currentStore) {
+  return !STORE_OPTIONS.slice(0, -1).includes(currentStore);
+}
+
+function buildCategoryOptionsHtml(currentCategory) {
+  let opts = CATEGORY_OPTIONS;
+  // 旧データ等、現在のカテゴリ一覧にない値が保存されている場合は選択肢として残す
+  if (!CATEGORY_OPTIONS.includes(currentCategory)) {
+    opts = [...CATEGORY_OPTIONS.slice(0, -1), currentCategory, 'その他'];
+  }
+  return opts.map(opt => `<option value="${escapeHtml(opt)}"${opt === currentCategory ? ' selected' : ''}>${escapeHtml(opt)}</option>`).join('');
+}
 
 function todayStr() {
   const d = new Date();
@@ -577,27 +676,50 @@ function render() {
   renderBreakdown('storeBreakdown', monthEntries, e => e.store || '(店名未入力)');
   renderBreakdown('categoryBreakdown', monthEntries, e => e.category || '(未分類)');
 
-  // list
+  // list（日付ごとにグループ化）
   const listEl = document.getElementById('entryList');
   if (monthEntries.length === 0) {
     listEl.innerHTML = '<div class="empty">まだ記録がありません</div>';
   } else {
     listEl.innerHTML = '';
+
+    // 日付ごとにグループを作成（monthEntriesは日付降順で並んでいる）
+    const groups = [];
+    let currentGroup = null;
     monthEntries.forEach(e => {
-      const row = document.createElement('div');
-      row.className = 'entry';
-      const md = e.date.slice(5).replace('-', '/');
-      row.innerHTML = `
-        <div class="entry-info">
-          <div class="entry-date">${md}</div>
-          <div class="entry-store">${escapeHtml(e.store || '(店名未入力)')}</div>
-          <div class="entry-cat">${escapeHtml(e.category || '未分類')}</div>
-        </div>
-        <div class="entry-amount">${formatYen(e.amount)}</div>
-        <button class="del-btn" data-id="${e.id}">✕</button>
-      `;
-      listEl.appendChild(row);
+      if (!currentGroup || currentGroup.date !== e.date) {
+        currentGroup = { date: e.date, items: [] };
+        groups.push(currentGroup);
+      }
+      currentGroup.items.push(e);
     });
+
+    groups.forEach(group => {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'date-group';
+
+      const dayTotal = group.items.reduce((sum, e) => sum + e.amount, 0);
+      const md = group.date.slice(5).replace('-', '/');
+
+      const headerEl = document.createElement('div');
+      headerEl.className = 'date-group-header';
+      headerEl.innerHTML = `
+        <span class="date-group-date">${md}</span>
+        <span class="date-group-total">日計 ${formatYen(dayTotal)}</span>
+      `;
+      groupEl.appendChild(headerEl);
+
+      group.items.forEach(e => {
+        if (editingId === e.id) {
+          groupEl.appendChild(buildEditRow(e));
+        } else {
+          groupEl.appendChild(buildEntryRow(e));
+        }
+      });
+
+      listEl.appendChild(groupEl);
+    });
+
     listEl.querySelectorAll('.del-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = Number(btn.getAttribute('data-id'));
@@ -606,7 +728,109 @@ function render() {
         render();
       });
     });
+
+    listEl.querySelectorAll('.edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        editingId = Number(btn.getAttribute('data-id'));
+        render();
+      });
+    });
+
+    listEl.querySelectorAll('.cancel-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        editingId = null;
+        render();
+      });
+    });
+
+    const editStoreSelect = listEl.querySelector('.edit-store');
+    if (editStoreSelect) {
+      editStoreSelect.addEventListener('change', () => {
+        const otherInput = listEl.querySelector('.edit-store-other');
+        otherInput.style.display = editStoreSelect.value === 'その他' ? 'block' : 'none';
+      });
+    }
+
+    const saveEditBtn = listEl.querySelector('.save-edit-btn');
+    if (saveEditBtn) {
+      saveEditBtn.addEventListener('click', async () => {
+        const id = Number(saveEditBtn.getAttribute('data-id'));
+        const dateVal = listEl.querySelector('.edit-date').value;
+        let storeVal = listEl.querySelector('.edit-store').value;
+        if (storeVal === 'その他') {
+          storeVal = listEl.querySelector('.edit-store-other').value.trim() || 'その他';
+        }
+        const categoryVal = listEl.querySelector('.edit-category').value;
+        const amountVal = parseFloat(listEl.querySelector('.edit-amount').value);
+
+        if (!dateVal || !amountVal || amountVal <= 0) {
+          return;
+        }
+
+        const target = entries.find(e => e.id === id);
+        if (target) {
+          target.date = dateVal;
+          target.store = storeVal;
+          target.category = categoryVal;
+          target.amount = amountVal;
+        }
+        editingId = null;
+        await saveEntries();
+        render();
+      });
+    }
   }
+}
+
+function buildEntryRow(e) {
+  const row = document.createElement('div');
+  row.className = 'entry';
+  const md = e.date.slice(5).replace('-', '/');
+  row.innerHTML = `
+    <div class="entry-info">
+      <div class="entry-date">${md}</div>
+      <div class="entry-store">${escapeHtml(e.store || '(店名未入力)')}</div>
+      <div class="entry-cat">${escapeHtml(e.category || '未分類')}</div>
+    </div>
+    <div class="entry-amount">${formatYen(e.amount)}</div>
+    <div class="entry-actions">
+      <button class="edit-btn" data-id="${e.id}">編集</button>
+      <button class="del-btn" data-id="${e.id}">✕</button>
+    </div>
+  `;
+  return row;
+}
+
+function buildEditRow(e) {
+  const row = document.createElement('div');
+  row.className = 'entry-edit';
+
+  const storeOptionsHtml = buildStoreOptionsHtml(e.store);
+  const showOther = isOtherStoreSelected(e.store);
+  const categoryOptionsHtml = buildCategoryOptionsHtml(e.category);
+
+  row.innerHTML = `
+    <label>日付</label>
+    <input type="date" class="edit-date" value="${e.date}">
+
+    <label>店</label>
+    <select class="edit-store">${storeOptionsHtml}</select>
+    <input type="text" class="edit-store-other" placeholder="店名を入力"
+      value="${showOther ? escapeHtml(e.store || '') : ''}"
+      style="margin-top:8px; display:${showOther ? 'block' : 'none'};">
+
+    <label>カテゴリ</label>
+    <select class="edit-category">${categoryOptionsHtml}</select>
+
+    <label>金額（円）</label>
+    <input type="number" class="edit-amount" value="${e.amount}" min="0" inputmode="numeric">
+
+    <div class="edit-actions">
+      <button class="save-edit-btn" data-id="${e.id}">保存</button>
+      <button class="cancel-edit-btn" data-id="${e.id}">キャンセル</button>
+    </div>
+  `;
+  return row;
 }
 
 function renderBreakdown(containerId, monthEntries, keyFn) {
