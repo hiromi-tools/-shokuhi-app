@@ -435,12 +435,31 @@ function todayStr() {
   return `${y}-${m}-${day}`;
 }
 
-function currentMonthKey() {
-  return todayStr().slice(0,7); // YYYY-MM
+function pad2(n) {
+  return String(n).padStart(2, '0');
 }
 
-function daysInMonth(year, month) {
-  return new Date(year, month, 0).getDate();
+function toISODate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+}
+
+// 25日〜翌月24日を1期間とする集計期間を返す
+function getPeriodRange(refDate) {
+  const y = refDate.getFullYear();
+  const m = refDate.getMonth(); // 0始まり
+  const day = refDate.getDate();
+
+  let startY = y, startM = m;
+  if (day < 25) {
+    startM = m - 1;
+    if (startM < 0) { startM = 11; startY -= 1; }
+  }
+  let endY = startY, endM = startM + 1;
+  if (endM > 11) { endM = 0; endY += 1; }
+
+  const start = new Date(startY, startM, 25);
+  const end = new Date(endY, endM, 24);
+  return { start, end };
 }
 
 function formatYen(n) {
@@ -486,25 +505,31 @@ async function saveSettings() {
 }
 
 function render() {
-  const monthKey = currentMonthKey();
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const dayOfMonth = now.getDate();
-  const totalDays = daysInMonth(year, month);
-  const daysLeft = totalDays - dayOfMonth + 1; // 今日を含む残り日数（月末まで）
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  // 週の残り日数（月曜始まり、今日を含む。月末で切れる場合はそちらを優先）
+  const { start: periodStart, end: periodEnd } = getPeriodRange(today);
+  const periodStartStr = toISODate(periodStart);
+  const periodEndStr = toISODate(periodEnd);
+
+  const MS_DAY = 1000 * 60 * 60 * 24;
+  const daysLeft = Math.round((periodEnd - today) / MS_DAY) + 1; // 今日を含む残り日数（期間の終わりまで）
+
+  // 週の残り日数（月曜始まり、今日を含む。期間の終わりで切れる場合はそちらを優先）
   const dow = now.getDay(); // 0=日,1=月,...6=土
   const mondayIndex = (dow + 6) % 7; // 0=月,...6=日
   const daysLeftInWeekRaw = 7 - mondayIndex; // 今日を含め日曜まで
   const weekDaysLeft = Math.min(daysLeftInWeekRaw, daysLeft);
 
-  document.getElementById('monthLabel').textContent = `${year}年${month}月の食費（予算 ${formatYen(budget)}）`;
+  const periodLabel = periodStart.getFullYear() === periodEnd.getFullYear()
+    ? `${periodStart.getFullYear()}年${periodStart.getMonth()+1}月${periodStart.getDate()}日〜${periodEnd.getMonth()+1}月${periodEnd.getDate()}日`
+    : `${periodStart.getFullYear()}年${periodStart.getMonth()+1}月${periodStart.getDate()}日〜${periodEnd.getFullYear()}年${periodEnd.getMonth()+1}月${periodEnd.getDate()}日`;
+
+  document.getElementById('monthLabel').textContent = `${periodLabel}の食費（予算 ${formatYen(budget)}）`;
   document.getElementById('budgetInput').value = budget;
 
   const monthEntries = entries
-    .filter(e => e.date.slice(0,7) === monthKey)
+    .filter(e => e.date >= periodStartStr && e.date <= periodEndStr)
     .sort((a,b) => b.date.localeCompare(a.date) || (b.id - a.id));
 
   const used = monthEntries.reduce((sum, e) => sum + e.amount, 0);
