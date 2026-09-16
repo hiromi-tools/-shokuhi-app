@@ -384,6 +384,100 @@
     font-size: 14px;
     padding: 8px;
   }
+  .settings-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 20px 0 16px;
+  }
+  .backup-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .backup-row button {
+    flex: 1;
+    padding: 14px 10px;
+    font-size: 16px;
+    font-weight: 700;
+    border: none;
+    border-radius: 10px;
+  }
+  .backup-btn {
+    background: var(--green);
+    color: #fff;
+  }
+  .backup-btn:active { background: var(--green-dark); }
+  .restore-btn {
+    background: #f3e6f5;
+    color: var(--text);
+  }
+  .backup-note {
+    font-size: 12px;
+    color: var(--sub);
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+  .backup-msg {
+    font-size: 13px;
+    color: var(--sub);
+    margin-top: 10px;
+    min-height: 18px;
+    text-align: center;
+  }
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(75, 63, 94, 0.45);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 22px 20px;
+    max-width: 380px;
+    width: 100%;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.18);
+  }
+  .modal h3 {
+    margin: 0 0 12px;
+    font-size: 18px;
+  }
+  .modal-body {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+  }
+  .modal-body .warn-text {
+    color: var(--red);
+    font-weight: 700;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .modal-actions button {
+    flex: 1;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    border: none;
+    border-radius: 10px;
+  }
+  .modal-ok {
+    background: var(--green);
+    color: #fff;
+  }
+  .modal-ok:active { background: var(--green-dark); }
+  .modal-cancel {
+    background: #f3e6f5;
+    color: var(--text);
+  }
 </style>
 </head>
 <body>
@@ -403,7 +497,32 @@
       <input type="number" id="budgetInput" inputmode="numeric" min="0">
       <button id="saveBudgetBtn">保存</button>
     </div>
+
+    <hr class="settings-divider">
+
+    <h2>データのバックアップ・復元</h2>
+    <div class="backup-row">
+      <button class="backup-btn" id="backupBtn">バックアップ</button>
+      <button class="restore-btn" id="restoreBtn">復元</button>
+    </div>
+    <input type="file" id="restoreFileInput" accept="application/json,.json" style="display:none;">
+    <div class="backup-msg" id="backupMsg"></div>
+    <div class="backup-note">
+      「バックアップ」でJSONファイルを保存できます。機種変更や履歴の消去に備えて、ときどき保存しておくと安心です。
+    </div>
+
     <button class="close-settings" id="closeSettingsBtn">閉じる</button>
+  </div>
+
+  <div class="modal-overlay" id="restoreModal">
+    <div class="modal">
+      <h3>データを復元しますか？</h3>
+      <div class="modal-body" id="restoreModalBody"></div>
+      <div class="modal-actions">
+        <button class="modal-cancel" id="restoreCancelBtn">キャンセル</button>
+        <button class="modal-ok" id="restoreOkBtn">復元する</button>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -927,6 +1046,171 @@ document.getElementById('saveBudgetBtn').addEventListener('click', async () => {
   await saveSettings();
   render();
   document.getElementById('settingsPanel').classList.remove('open');
+});
+
+// ===== バックアップ・復元 =====
+const BACKUP_FORMAT = 'shokuhi-budget-backup';
+
+function setBackupMsg(text, isError) {
+  const el = document.getElementById('backupMsg');
+  el.style.color = isError ? 'var(--red)' : 'var(--sub)';
+  el.textContent = text;
+  if (text) {
+    setTimeout(() => {
+      if (el.textContent === text) el.textContent = '';
+    }, 4000);
+  }
+}
+
+function doBackup() {
+  try {
+    // localStorageの中身をそのままの形で保存（互換性のため加工しない）
+    const payload = {
+      format: BACKUP_FORMAT,
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      data: {
+        [ENTRIES_KEY]: localStorage.getItem(ENTRIES_KEY),
+        [SETTINGS_KEY]: localStorage.getItem(SETTINGS_KEY)
+      }
+    };
+
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shokuhi-backup-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+    setBackupMsg('バックアップを書き出しました。', false);
+  } catch (e) {
+    setBackupMsg('バックアップに失敗しました。', true);
+  }
+}
+
+// 復元候補を一時的に保持（確認画面でOKするまで反映しない）
+let pendingRestore = null;
+
+function parseBackupFile(text) {
+  const parsed = JSON.parse(text);
+
+  // 新形式（このアプリのバックアップ）
+  if (parsed && parsed.data && typeof parsed.data === 'object') {
+    const rawEntries = parsed.data[ENTRIES_KEY];
+    const rawSettings = parsed.data[SETTINGS_KEY];
+    const entriesArr = rawEntries ? JSON.parse(rawEntries) : [];
+    if (!Array.isArray(entriesArr)) throw new Error('invalid');
+    return {
+      entriesRaw: rawEntries != null ? rawEntries : JSON.stringify([]),
+      settingsRaw: rawSettings != null ? rawSettings : null,
+      entriesCount: entriesArr.length,
+      budget: (() => {
+        try {
+          const s = rawSettings ? JSON.parse(rawSettings) : null;
+          return s && s.budget ? s.budget : null;
+        } catch (e) { return null; }
+      })(),
+      exportedAt: parsed.exportedAt || null
+    };
+  }
+
+  // 旧・素朴な形式（買い物履歴の配列がそのまま入っている場合）にも対応
+  if (Array.isArray(parsed)) {
+    return {
+      entriesRaw: JSON.stringify(parsed),
+      settingsRaw: null,
+      entriesCount: parsed.length,
+      budget: null,
+      exportedAt: null
+    };
+  }
+
+  throw new Error('invalid');
+}
+
+function openRestoreModal(info) {
+  pendingRestore = info;
+  const currentCount = entries.length;
+  const exportedLabel = info.exportedAt
+    ? new Date(info.exportedAt).toLocaleString('ja-JP')
+    : '不明';
+
+  document.getElementById('restoreModalBody').innerHTML = `
+    <div>バックアップファイルの内容</div>
+    <div>・買い物の記録：${info.entriesCount}件</div>
+    <div>・月の予算：${info.budget ? formatYen(info.budget) : '（含まれていません）'}</div>
+    <div>・作成日時：${escapeHtml(exportedLabel)}</div>
+    <div style="margin-top:12px;">現在このアプリには ${currentCount}件 の記録があります。</div>
+    <div class="warn-text" style="margin-top:8px;">復元すると、現在のデータはこのファイルの内容に置き換わります。</div>
+    <div style="margin-top:8px;">復元前に、念のため今のデータを「バックアップ」しておくことをおすすめします。</div>
+  `;
+  document.getElementById('restoreModal').classList.add('open');
+}
+
+function closeRestoreModal() {
+  document.getElementById('restoreModal').classList.remove('open');
+  pendingRestore = null;
+  document.getElementById('restoreFileInput').value = '';
+}
+
+async function applyRestore() {
+  if (!pendingRestore) return;
+  try {
+    localStorage.setItem(ENTRIES_KEY, pendingRestore.entriesRaw);
+    if (pendingRestore.settingsRaw != null) {
+      localStorage.setItem(SETTINGS_KEY, pendingRestore.settingsRaw);
+    }
+    const count = pendingRestore.entriesCount;
+    closeRestoreModal();
+
+    await loadSettings();
+    await loadEntries();
+    editingId = null;
+    render();
+
+    setBackupMsg(`${count}件の記録を復元しました。`, false);
+  } catch (e) {
+    closeRestoreModal();
+    setBackupMsg('復元に失敗しました。', true);
+  }
+}
+
+document.getElementById('backupBtn').addEventListener('click', doBackup);
+
+document.getElementById('restoreBtn').addEventListener('click', () => {
+  document.getElementById('restoreFileInput').click();
+});
+
+document.getElementById('restoreFileInput').addEventListener('change', (ev) => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const info = parseBackupFile(String(reader.result));
+      openRestoreModal(info);
+    } catch (e) {
+      setBackupMsg('このファイルは読み込めませんでした。バックアップファイルを選んでください。', true);
+      document.getElementById('restoreFileInput').value = '';
+    }
+  };
+  reader.onerror = () => {
+    setBackupMsg('ファイルの読み込みに失敗しました。', true);
+    document.getElementById('restoreFileInput').value = '';
+  };
+  reader.readAsText(file);
+});
+
+document.getElementById('restoreOkBtn').addEventListener('click', applyRestore);
+document.getElementById('restoreCancelBtn').addEventListener('click', closeRestoreModal);
+document.getElementById('restoreModal').addEventListener('click', (ev) => {
+  if (ev.target.id === 'restoreModal') closeRestoreModal();
 });
 
 (async () => {
